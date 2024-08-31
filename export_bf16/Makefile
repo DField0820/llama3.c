@@ -4,7 +4,7 @@ CC = gcc
 
 # the most basic way of building that is most likely to work on most systems
 .PHONY: run
-run: run-check.c
+run: run_fp32.c
 	$(CC) -O3 -o run_fp32 run_fp32.c -lm
 	$(CC) -O3 -o run_bf16 run_bf16.c -lm
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
-
+from transformers import AutoModelForCausalLM
 
 def serialize_fp32(file, tensor):
     """ writes one fp32 tensor to file that is open in wb mode """
@@ -17,8 +17,17 @@ def serialize_fp32(file, tensor):
     b = struct.pack(f'{len(d)}f', *d)
     file.write(b)
 
+def convert_tensor(w, n_heads, dim):
+    dim1 = len(tensor)
+    dim2 = len(tensor[0])
+    return (
+        w.view(int(n_heads * (dim1 / dim)), 2, int(dim / n_heads / 2), dim2)
+        .transpose(1, 2)
+        .reshape(dim1, dim2)
+    )
+    
 def extract_layer_info(tensor_name):
-    match = re.match(r'layers\.(\d+)\.(.+)', tensor_name)
+    match = re.match(r'model.layers\.(\d+)\.(.+)', tensor_name)
     if match:
         layer_num = int(match.group(1))
         layer_suffix = match.group(2)
@@ -26,12 +35,32 @@ def extract_layer_info(tensor_name):
     else:
         return None, tensor_name
 
+def replace_key_names(key):
+    replacements = {
+        "model.embed_tokens.weight": "weight.tok_embeddings",
+        "self_attn.q_proj.weight": "weight.attention.wq",
+        "self_attn.k_proj.weight": "weight.attention.wk",
+        "self_attn.v_proj.weight": "weight.attention.wv",
+        "self_attn.o_proj.weight": "weight.attention.wo",
+        "mlp.gate_proj.weight": "weight.feed_forward.w1",
+        "mlp.up_proj.weight": "weight.feed_forward.w3",
+        "mlp.down_proj.weight": "weight.feed_forward.w2",
+        "input_layernorm.weight": "weight.attention_norm",
+        "post_attention_layernorm.weight": "weight.ffn_norm",
+        "model.norm.weight": "weight.norm",
+        "lm_head.weight": "weight.output"
+    }
+
+    for old_key, new_key in replacements.items():
+        key = key.replace(old_key, new_key)
+    return key
+
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("dirpath", type=str, help="the output dirpath")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--pth", type=str, help="pth model path")
+    group.add_argument("--hf", type=str, help="hf model path")
     args = parser.parse_args()
 
     dirpath = args.dirpath
@@ -45,6 +74,7 @@ if __name__ == "__main__":
     n_kv_heads = 8
     vocab_size = -128256
     max_seq_len = 8192
+    #max_seq_len = 131072
 
     config = struct.pack('iiiiiii', dim, hidden_dim, n_layers, n_heads,
                          n_kv_heads, vocab_size, max_seq_len)
@@ -54,42 +84,30 @@ if __name__ == "__main__":
         f.write(config)
     print(f"Saved config to {config_filepath}")
 
-    model_path = args.pth
-    model_paths = sorted(list(Path(model_path).glob('consolidated.*.pth')))
-    models = [torch.load(p, weights_only=True) for p in model_paths]
+    # load HF model
+    model_path = args.hf
+    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
+    hf_dict = hf_model.state_dict()
 
-    for name in list(models[0]):
-        
-
-        is_concat = False
-        tensors = [model[name] for model in models]
-
-        if len(tensors) == 1 or len(tensors[0].shape) == 1:
-            concat_tensor = tensors[0]
-            is_concat = True
-        is_axis_1 = (
-            name.endswith('.attention.wo.weight')
-            or name.endswith('.feed_forward.w2.weight')
-        )
-        axis = 1 if is_axis_1 else 0
-        if not is_concat:
-            concat_tensor = nn.Parameter(torch.cat(tensors, dim=axis))
-
+    for name in list(hf_dict.keys()):
+        tensor = hf_dict[name]
         layer_num, layer_suffix = extract_layer_info(name)
+
+        if layer_suffix in ("self_attn.q_proj.weight", "self_attn.k_proj.weight"):
+            tensor = convert_tensor(tensor, n_heads, dim)
 
         if layer_num is not None:
             layer_path = os.path.join(dirpath, f"layer.{layer_num:03d}")
             os.makedirs(layer_path, exist_ok=True)
 
-            file_name = f"weight.{layer_suffix.replace('.weight', '')}.bin"
+            file_name = f"{replace_key_names(layer_suffix)}.bin"
             file_path = os.path.join(layer_path, file_name)
             with open(file_path, 'wb') as f:
-                serialize_fp32(f, concat_tensor)
+                serialize_fp32(f, tensor)
                 print(f"Saved weights to {file_path}")
         else:
-            file_name = f"weight.{layer_suffix.replace('.weight', '')}.bin"
+            file_name = f"{replace_key_names(layer_suffix)}.bin"
             file_path = os.path.join(dirpath, file_name)
             with open(file_path, 'wb') as f:
-                serialize_fp32(f, concat_tensor)
+                serialize_fp32(f, tensor)
                 print(f"Saved weights to {file_path}")
-

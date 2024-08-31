@@ -126,9 +126,6 @@ float* load_file_into_buffer(const char *filename, float *buffer, size_t size) {
     if (items_read != size / sizeof(float)) {
       printf("fread read %zu items instead of expected %zu\n", items_read, size / sizeof(float));
       printf("Expected size: %zu elements\n", size / sizeof(float));
-      printf("Size: %zu\n", size);
-    
-      printf("File read failed, %s", filename);
       fclose(file);
       exit(EXIT_FAILURE);
     }
@@ -349,15 +346,9 @@ float *forward(Transformer *transformer, int token, int pos) {
   float *content_row = w->token_embedding_table + token * dim;
   memcpy(x, content_row, dim * sizeof(*x));
 
-  // printf("layer:");
-  // fflush(stdout);
-  
   // forward all the layers
   for (unsigned long long l = 0; l < p->n_layers; l++) {
 
-    // printf("%lld,", l);
-    // fflush(stdout);
-    
     // attention rmsnorm
     rmsnorm(s->xb, x, w->rms_att_weight + l * dim, dim);
 

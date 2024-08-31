@@ -59,8 +59,6 @@ if __name__ == "__main__":
     models = [torch.load(p, weights_only=True) for p in model_paths]
 
     for name in list(models[0]):
-        
-
         is_concat = False
         tensors = [model[name] for model in models]
 
