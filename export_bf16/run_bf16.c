@@ -28,24 +28,18 @@ typedef struct {
 } Config;
 
 typedef struct {
-  // token embedding table
-  float *token_embedding_table; // (vocab_size, dim)
-  // weights for rmsnorms
-  float *rms_att_weight; // (layer, dim) rmsnorm weights
-  float *rms_ffn_weight; // (layer, dim)
-  // weights for matmuls. note dim == n_heads * head_size
-  float *wq; // (layer, dim, n_heads * head_size)
-  float *wk; // (layer, dim, n_kv_heads * head_size)
-  float *wv; // (layer, dim, n_kv_heads * head_size)
-  float *wo; // (layer, n_heads * head_size, dim)
-  // weights for ffn
-  float *w1; // (layer, hidden_dim, dim)
-  float *w2; // (layer, dim, hidden_dim)
-  float *w3; // (layer, hidden_dim, dim)
-  // final rmsnorm
-  float *rms_final_weight; // (dim,)
-  // (optional) classifier weights for the logits, on the last layer
-  float *wcls;
+  uint16_t *token_embedding_table; // Change from float* to uint16_t*
+  uint16_t *rms_att_weight;
+  uint16_t *rms_ffn_weight;
+  uint16_t *wq;
+  uint16_t *wk;
+  uint16_t *wv;
+  uint16_t *wo;
+  uint16_t *w1;
+  uint16_t *w2;
+  uint16_t *w3;
+  uint16_t *rms_final_weight;
+  uint16_t *wcls;
 } TransformerWeights;
 
 typedef struct {
@@ -116,37 +110,21 @@ void get_filePath(const char *basePath, const char *fileName, char *fullPath) {
   strcat(fullPath, fileName);
 }
 
-void load_bf16_file_into_buffer(const char *filename, float *buffer, size_t size) {
+void load_bf16_file_into_buffer(const char *filename, uint16_t *buffer, size_t size) {
     FILE *file = fopen(filename, "rb");
     if (!file) {
         printf("File opening failed, %s", filename);
         exit(EXIT_FAILURE);
     }
 
-    size_t bf16_size = size / 2;
-    uint16_t *bf16_buffer = (uint16_t *)malloc(bf16_size);
-    if (!bf16_buffer) {
-        perror("Memory allocation failed for bf16 buffer");
+    size_t items_read = fread(buffer, sizeof(uint16_t), size / sizeof(uint16_t), file);
+    if (items_read != size / sizeof(uint16_t)) {
+        printf("fread read %zu items instead of expected %zu\n", items_read, size / sizeof(uint16_t));
         fclose(file);
         exit(EXIT_FAILURE);
-    }
-
-    size_t items_read = fread(bf16_buffer, sizeof(uint16_t), bf16_size / sizeof(uint16_t), file);
-    if (items_read != bf16_size / sizeof(uint16_t)) {
-        printf("fread read %zu items instead of expected %zu\n", items_read, bf16_size / sizeof(uint16_t));
-        printf("Expected size: %zu elements\n", bf16_size / sizeof(uint16_t));
-        fclose(file);
-        free(bf16_buffer);
-        exit(EXIT_FAILURE);
-    }
-
-    for (size_t i = 0; i < items_read; i++) {
-        uint32_t temp = ((uint32_t)bf16_buffer[i]) << 16;
-        buffer[i] = *(float*)&temp;
     }
 
     fclose(file);
-    free(bf16_buffer);
 }
 
 void memory_map_weights(TransformerWeights *w, Config *p, const char *basePath, int shared_weights) {
@@ -157,21 +135,21 @@ void memory_map_weights(TransformerWeights *w, Config *p, const char *basePath, 
 
     // Token Embedding Table
     get_filePath(basePath, "weight.tok_embeddings.bin", filePath);
-    w->token_embedding_table = (float *)malloc(p->vocab_size * p->dim * sizeof(float));
-    load_bf16_file_into_buffer(filePath, w->token_embedding_table, p->vocab_size * p->dim * sizeof(float));
+    w->token_embedding_table = (uint16_t *)malloc(p->vocab_size * p->dim * sizeof(uint16_t));
+    load_bf16_file_into_buffer(filePath, w->token_embedding_table, p->vocab_size * p->dim * sizeof(uint16_t));
 
     // Attention weights memory allocation
-    w->rms_att_weight = (float *)malloc(n_layers * p->dim * sizeof(float));
-    w->wq = (float *)malloc(n_layers * p->dim * p->n_heads * head_size * sizeof(float));
-    w->wk = (float *)malloc(n_layers * p->dim * p->n_kv_heads * head_size * sizeof(float));
-    w->wv = (float *)malloc(n_layers * p->dim * p->n_kv_heads * head_size * sizeof(float));
-    w->wo = (float *)malloc(n_layers * (p->n_heads * head_size) * p->dim * sizeof(float));
+    w->rms_att_weight = (uint16_t *)malloc(n_layers * p->dim * sizeof(uint16_t));
+    w->wq = (uint16_t *)malloc(n_layers * p->dim * p->n_heads * head_size * sizeof(uint16_t));
+    w->wk = (uint16_t *)malloc(n_layers * p->dim * p->n_kv_heads * head_size * sizeof(uint16_t));
+    w->wv = (uint16_t *)malloc(n_layers * p->dim * p->n_kv_heads * head_size * sizeof(uint16_t));
+    w->wo = (uint16_t *)malloc(n_layers * (p->n_heads * head_size) * p->dim * sizeof(uint16_t));
 
-    float *ptr_rms_att = w->rms_att_weight;
-    float *ptr_wq = w->wq;
-    float *ptr_wk = w->wk;
-    float *ptr_wv = w->wv;
-    float *ptr_wo = w->wo;
+    uint16_t *ptr_rms_att = w->rms_att_weight;
+    uint16_t *ptr_wq = w->wq;
+    uint16_t *ptr_wk = w->wk;
+    uint16_t *ptr_wv = w->wv;
+    uint16_t *ptr_wo = w->wo;
 
     // Attention weights loading
     for (int i = 0; i < n_layers; i++) {
@@ -181,44 +159,44 @@ void memory_map_weights(TransformerWeights *w, Config *p, const char *basePath, 
         // RMSNorm weights for attention
         char filePath_att[512];
         get_filePath(filePath, "weight.attention_norm.bin", filePath_att);
-        load_bf16_file_into_buffer(filePath_att, ptr_rms_att, p->dim * sizeof(float));
+        load_bf16_file_into_buffer(filePath_att, ptr_rms_att, p->dim * sizeof(uint16_t));
         ptr_rms_att += p->dim;
 
         // WQ
         char filePath_wq[512];
         get_filePath(filePath, "weight.attention.wq.bin", filePath_wq);
-        load_bf16_file_into_buffer(filePath_wq, ptr_wq, p->dim * p->n_heads * head_size * sizeof(float));
+        load_bf16_file_into_buffer(filePath_wq, ptr_wq, p->dim * p->n_heads * head_size * sizeof(uint16_t));
         ptr_wq += p->dim * p->n_heads * head_size;
 
         // WK
         char filePath_wk[512];
         get_filePath(filePath, "weight.attention.wk.bin", filePath_wk);
-        load_bf16_file_into_buffer(filePath_wk, ptr_wk, p->dim * p->n_kv_heads * head_size * sizeof(float));
+        load_bf16_file_into_buffer(filePath_wk, ptr_wk, p->dim * p->n_kv_heads * head_size * sizeof(uint16_t));
         ptr_wk += p->dim * p->n_kv_heads * head_size;
 
         // WV
         char filePath_wv[512];
         get_filePath(filePath, "weight.attention.wv.bin", filePath_wv);
-        load_bf16_file_into_buffer(filePath_wv, ptr_wv, p->dim * p->n_kv_heads * head_size * sizeof(float));
+        load_bf16_file_into_buffer(filePath_wv, ptr_wv, p->dim * p->n_kv_heads * head_size * sizeof(uint16_t));
         ptr_wv += p->dim * p->n_kv_heads * head_size;
 
         // WO
         char filePath_wo[512];
         get_filePath(filePath, "weight.attention.wo.bin", filePath_wo);
-        load_bf16_file_into_buffer(filePath_wo, ptr_wo, (p->n_heads * head_size) * p->dim * sizeof(float));
+        load_bf16_file_into_buffer(filePath_wo, ptr_wo, (p->n_heads * head_size) * p->dim * sizeof(uint16_t));
         ptr_wo += (p->n_heads * head_size) * p->dim;
     }
 
     // FFN weights memory allocation
-    w->rms_ffn_weight = (float *)malloc(n_layers * p->dim * sizeof(float));
-    w->w1 = (float *)malloc(n_layers * p->dim * p->hidden_dim * sizeof(float));
-    w->w2 = (float *)malloc(n_layers * p->hidden_dim * p->dim * sizeof(float));
-    w->w3 = (float *)malloc(n_layers * p->dim * p->hidden_dim * sizeof(float));
+    w->rms_ffn_weight = (uint16_t *)malloc(n_layers * p->dim * sizeof(uint16_t));
+    w->w1 = (uint16_t *)malloc(n_layers * p->dim * p->hidden_dim * sizeof(uint16_t));
+    w->w2 = (uint16_t *)malloc(n_layers * p->hidden_dim * p->dim * sizeof(uint16_t));
+    w->w3 = (uint16_t *)malloc(n_layers * p->dim * p->hidden_dim * sizeof(uint16_t));
 
-    float *ptr_rms_ffn = w->rms_ffn_weight;
-    float *ptr_w1 = w->w1;
-    float *ptr_w2 = w->w2;
-    float *ptr_w3 = w->w3;
+    uint16_t *ptr_rms_ffn = w->rms_ffn_weight;
+    uint16_t *ptr_w1 = w->w1;
+    uint16_t *ptr_w2 = w->w2;
+    uint16_t *ptr_w3 = w->w3;
 
     // FFN weights loading
     for (int i = 0; i < n_layers; i++) {
@@ -228,40 +206,40 @@ void memory_map_weights(TransformerWeights *w, Config *p, const char *basePath, 
         // RMSNorm weights for FFN
         char filePath_rms[512];
         get_filePath(filePath, "weight.ffn_norm.bin", filePath_rms);
-        load_bf16_file_into_buffer(filePath_rms, ptr_rms_ffn, p->dim * sizeof(float));
+        load_bf16_file_into_buffer(filePath_rms, ptr_rms_ffn, p->dim * sizeof(uint16_t));
         ptr_rms_ffn += p->dim;
 
         // W1
         char filePath_w1[512];
         get_filePath(filePath, "weight.feed_forward.w1.bin", filePath_w1);
-        load_bf16_file_into_buffer(filePath_w1, ptr_w1, p->dim * p->hidden_dim * sizeof(float));
+        load_bf16_file_into_buffer(filePath_w1, ptr_w1, p->dim * p->hidden_dim * sizeof(uint16_t));
         ptr_w1 += p->dim * p->hidden_dim;
 
         // W2
         char filePath_w2[512];
         get_filePath(filePath, "weight.feed_forward.w2.bin", filePath_w2);
-        load_bf16_file_into_buffer(filePath_w2, ptr_w2, p->hidden_dim * p->dim * sizeof(float));
+        load_bf16_file_into_buffer(filePath_w2, ptr_w2, p->hidden_dim * p->dim * sizeof(uint16_t));
         ptr_w2 += p->hidden_dim * p->dim;
 
         // W3
         char filePath_w3[512];
         get_filePath(filePath, "weight.feed_forward.w3.bin", filePath_w3);
-        load_bf16_file_into_buffer(filePath_w3, ptr_w3, p->dim * p->hidden_dim * sizeof(float));
+        load_bf16_file_into_buffer(filePath_w3, ptr_w3, p->dim * p->hidden_dim * sizeof(uint16_t));
         ptr_w3 += p->dim * p->hidden_dim;
     }
 
     // Final RMSNorm weight
     get_filePath(basePath, "weight.norm.bin", filePath);
-    w->rms_final_weight = (float *)malloc(p->dim * sizeof(float));
-    load_bf16_file_into_buffer(filePath, w->rms_final_weight, p->dim * sizeof(float));
+    w->rms_final_weight = (uint16_t *)malloc(p->dim * sizeof(uint16_t));
+    load_bf16_file_into_buffer(filePath, w->rms_final_weight, p->dim * sizeof(uint16_t));
 
     // Classifier weight
     if (shared_weights) {
         w->wcls = w->token_embedding_table;
     } else {
         get_filePath(basePath, "weight.output.bin", filePath);
-        w->wcls = (float *)malloc(p->vocab_size * p->dim * sizeof(float));
-        load_bf16_file_into_buffer(filePath, w->wcls, p->vocab_size * p->dim * sizeof(float));
+        w->wcls = (uint16_t *)malloc(p->vocab_size * p->dim * sizeof(uint16_t));
+        load_bf16_file_into_buffer(filePath, w->wcls, p->vocab_size * p->dim * sizeof(uint16_t));
     }
 }
 
@@ -307,22 +285,29 @@ void free_transformer(Transformer *t) {
   free_run_state(&t->state);
 }
 
+static inline float bf16_to_fp32(uint16_t bf16) {
+    uint32_t temp = ((uint32_t)bf16) << 16;
+    return *(float*)&temp;
+}
+
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
 
-void rmsnorm(float *o, float *x, float *weight, int size) {
-  // calculate sum of squares
-  float ss = 0.0f;
-  for (int j = 0; j < size; j++) {
-    ss += x[j] * x[j];
-  }
-  ss /= size;
-  ss += 1e-5f;
-  ss = 1.0f / sqrtf(ss);
-  // normalize and scale
-  for (int j = 0; j < size; j++) {
-    o[j] = weight[j] * (ss * x[j]);
-  }
+void rmsnorm(float *o, float *x, uint16_t *weight_bf16, int size) {
+    // calculate sum of squares
+    float ss = 0.0f;
+    for (int j = 0; j < size; j++) {
+        ss += x[j] * x[j];
+    }
+    ss /= size;
+    ss += 1e-5f;
+    ss = 1.0f / sqrtf(ss);
+
+    // normalize and scale
+    for (int j = 0; j < size; j++) {
+        float weight_fp32 = bf16_to_fp32(weight_bf16[j]); // bf16からfp32への変換
+        o[j] = weight_fp32 * (ss * x[j]);
+    }
 }
 
 void softmax(float *x, int size) {
@@ -345,18 +330,18 @@ void softmax(float *x, int size) {
   }
 }
 
-void matmul(float *xout, float *x, float *w, int n, int d) {
-  // W (d,n) @ x (n,) -> xout (d,)
-  // by far the most amount of time is spent inside this little function
-  int i;
+void matmul(float *xout, float *x, uint16_t *w_bf16, int n, int d) {
+    // W (d,n) @ x (n,) -> xout (d,)
+    int i;
 #pragma omp parallel for private(i)
-  for (i = 0; i < d; i++) {
-    float val = 0.0f;
-    for (int j = 0; j < n; j++) {
-      val += w[i * n + j] * x[j];
+    for (i = 0; i < d; i++) {
+        float val = 0.0f;
+        for (int j = 0; j < n; j++) {
+            float w_fp32 = bf16_to_fp32(w_bf16[i * n + j]);
+            val += w_fp32 * x[j];
+        }
+        xout[i] = val;
     }
-    xout[i] = val;
-  }
 }
 
 float *forward(Transformer *transformer, int token, int pos) {
@@ -373,18 +358,22 @@ float *forward(Transformer *transformer, int token, int pos) {
   int head_size = dim / p->n_heads;
 
   // copy the token embedding into x
-  float *content_row = w->token_embedding_table + token * dim;
-  memcpy(x, content_row, dim * sizeof(*x));
+  float *content_row = (float *)malloc(dim * sizeof(float));
+  if (!content_row) {
+    fprintf(stderr, "Memory allocation failed for content_row\n");
+    exit(EXIT_FAILURE);
+  }
 
-  // printf("layer:");
-  // fflush(stdout);
-  
+  uint16_t *embedding_ptr = w->token_embedding_table + (token * dim);
+  for (int i = 0; i < dim; i++) {
+    content_row[i] = bf16_to_fp32(embedding_ptr[i]);
+  }
+  memcpy(x, content_row, dim * sizeof(*x));
+  free(content_row);
+
   // forward all the layers
   for (unsigned long long l = 0; l < p->n_layers; l++) {
 
-    // printf("%lld,", l);
-    // fflush(stdout);
-    
     // attention rmsnorm
     rmsnorm(s->xb, x, w->rms_att_weight + l * dim, dim);
 
